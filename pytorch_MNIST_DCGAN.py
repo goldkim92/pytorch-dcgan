@@ -73,11 +73,11 @@ class generator(nn.Module):
     # forward method
     def forward(self, input):
         # x = F.relu(self.deconv1(input))
-        x = F.relu(self.deconv1_bn(self.deconv1(input)))
-        x = F.relu(self.deconv2_bn(self.deconv2(x)))
-        x = F.relu(self.deconv3_bn(self.deconv3(x)))
-        x = F.relu(self.deconv4_bn(self.deconv4(x)))
-        x = F.tanh(self.deconv5(x))
+        x = F.relu(self.deconv1_bn(self.deconv1(input))) # 8d*4*4
+        x = F.relu(self.deconv2_bn(self.deconv2(x))) # 4d*8*8
+        x = F.relu(self.deconv3_bn(self.deconv3(x))) # 2d*16*16
+        x = F.relu(self.deconv4_bn(self.deconv4(x))) # d*32*32
+        x = F.tanh(self.deconv5(x)) # 1*64*64
         return x
 
     
@@ -101,10 +101,10 @@ class discriminator(nn.Module):
 
     # forward method
     def forward(self, input):
-        x = F.leaky_relu(self.conv1(input), 0.2)
-        x = F.leaky_relu(self.conv2_bn(self.conv2(x)), 0.2)
-        x = F.leaky_relu(self.conv3_bn(self.conv3(x)), 0.2)
-        x = F.leaky_relu(self.conv4_bn(self.conv4(x)), 0.2)
+        x = F.leaky_relu(self.conv1(input), 0.2) # d*32*32
+        x = F.leaky_relu(self.conv2_bn(self.conv2(x)), 0.2) # 2d*16*16
+        x = F.leaky_relu(self.conv3_bn(self.conv3(x)), 0.2) # 4d*8*8
+        x = F.leaky_relu(self.conv4_bn(self.conv4(x)), 0.2) # 8d*4*4
         x = F.sigmoid(self.conv5(x))
 
         return x
@@ -188,8 +188,6 @@ start_time = time.time()
 count = 0
 for epoch in range(train_epoch):
     print('Epoch[{}/{}]'.format(epoch+1, train_epoch))
-    D_losses = []
-    G_losses = []
     epoch_start_time = time.time()
     for x_, _ in tqdm(train_loader):
         count += 1
@@ -213,15 +211,11 @@ for epoch in range(train_epoch):
 
         D_fake_result = D(G_result).squeeze()
         D_fake_loss = BCE_loss(D_fake_result, y_fake_)
-        D_fake_score = D_fake_result.data.mean()
 
         D_train_loss = D_real_loss + D_fake_loss
 
         D_train_loss.backward()
         D_optimizer.step()
-
-        # D_losses.append(D_train_loss.data[0])
-        D_losses.append(D_train_loss.data[0])
 
         # summary the real_d & fake_d value
         writer.add_scalars('val',{'real_d':D_real_result.mean(), 'fake_d':D_fake_result.mean()}, count)
@@ -239,8 +233,6 @@ for epoch in range(train_epoch):
         G_train_loss = BCE_loss(D_result, y_real_)
         G_train_loss.backward()
         G_optimizer.step()
-
-        G_losses.append(G_train_loss.data[0])
         
         # summary D_loss & G_loss
         writer.add_scalars('loss',{'D':D_train_loss, 'G':G_train_loss}, count)
