@@ -1,14 +1,58 @@
 import os, time, sys
+import numpy as np
 import matplotlib.pyplot as plt
+import scipy.misc as scm
 import itertools
 import pickle
 import imageio
+from tqdm import tqdm
+from glob import glob
+import argparse
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import datasets, transforms
+from torchvision.utils import make_grid
 from torch.autograd import Variable
+from tensorboardX import SummaryWriter
+
+
+# argument parser
+parser = argparse.ArgumentParser(description='')
+
+parser.add_argument('--gpu_number',     type=str,   default='0')
+parser.add_argument('--data_dir',       type=str,   default=os.path.join('.','data','celebA'))
+parser.add_argument('--log_dir',        type=str,   default='log') # in assets/ directory
+parser.add_argument('--ckpt_dir',       type=str,   default='checkpoint') # in assets/ directory
+parser.add_argument('--sample_dir',     type=str,   default='sample') # in assets/ directory
+parser.add_argument('--test_dir',       type=str,   default='test') # in assets/ directory
+parser.add_argument('--assets_dir',     type=str,   default=None,   required=True) # if assets_dir='aa' -> assets_dir='./assets/aa'
+
+args = parser.parse_args()
+
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   # see issue #152
+os.environ["CUDA_VISIBLE_DEVICES"]=args.gpu_number
+
+assets_dir = os.path.join('.','assets',args.assets_dir)
+args.log_dir = os.path.join(assets_dir, args.log_dir)
+args.ckpt_dir = os.path.join(assets_dir, args.ckpt_dir)
+args.sample_dir = os.path.join(assets_dir, args.sample_dir)
+args.test_dir = os.path.join(assets_dir, args.test_dir)
+
+# make directory if not exist
+try: os.makedirs(args.log_dir)
+except: pass
+try: os.makedirs(args.ckpt_dir)
+except: pass
+try: os.makedirs(args.sample_dir)
+except: pass
+try: os.makedirs(args.test_dir)
+except: pass
+
+# summary writer
+writer = SummaryWriter(args.log_dir)
+
 
 # G(z)
 class generator(nn.Module):
@@ -33,11 +77,11 @@ class generator(nn.Module):
     # forward method
     def forward(self, input):
         # x = F.relu(self.deconv1(input))
-        x = F.relu(self.deconv1_bn(self.deconv1(input)))
-        x = F.relu(self.deconv2_bn(self.deconv2(x)))
-        x = F.relu(self.deconv3_bn(self.deconv3(x)))
-        x = F.relu(self.deconv4_bn(self.deconv4(x)))
-        x = F.tanh(self.deconv5(x))
+        x = F.relu(self.deconv1_bn(self.deconv1(input))) # 8d*4*4
+        x = F.relu(self.deconv2_bn(self.deconv2(x))) # 4d*8*8
+        x = F.relu(self.deconv3_bn(self.deconv3(x))) # 2d*16*16
+        x = F.relu(self.deconv4_bn(self.deconv4(x))) # d*32*32
+        x = F.tanh(self.deconv5(x)) # 3*64*64
 
         return x
 
@@ -61,10 +105,10 @@ class discriminator(nn.Module):
 
     # forward method
     def forward(self, input):
-        x = F.leaky_relu(self.conv1(input), 0.2)
-        x = F.leaky_relu(self.conv2_bn(self.conv2(x)), 0.2)
-        x = F.leaky_relu(self.conv3_bn(self.conv3(x)), 0.2)
-        x = F.leaky_relu(self.conv4_bn(self.conv4(x)), 0.2)
+        x = F.leaky_relu(self.conv1(input), 0.2) # d*32*32
+        x = F.leaky_relu(self.conv2_bn(self.conv2(x)), 0.2) # 2d*16*16
+        x = F.leaky_relu(self.conv3_bn(self.conv3(x)), 0.2) # 4d*8*8
+        x = F.leaky_relu(self.conv4_bn(self.conv4(x)), 0.2) # 8d*4*4
         x = F.sigmoid(self.conv5(x))
 
         return x
@@ -76,7 +120,8 @@ def normal_init(m, mean, std):
 
 fixed_z_ = torch.randn((5 * 5, 100)).view(-1, 100, 1, 1)    # fixed noise
 fixed_z_ = Variable(fixed_z_.cuda(), volatile=True)
-def show_result(num_epoch, show = False, save = False, path = 'result.png', isFix=False):
+
+def show_result(count, show = False, save = False, path = 'result.png', isFix=False):
     z_ = torch.randn((5*5, 100)).view(-1, 100, 1, 1)
     z_ = Variable(z_.cuda(), volatile=True)
 
@@ -87,81 +132,77 @@ def show_result(num_epoch, show = False, save = False, path = 'result.png', isFi
         test_images = G(z_)
     G.train()
 
-    size_figure_grid = 5
-    fig, ax = plt.subplots(size_figure_grid, size_figure_grid, figsize=(5, 5))
-    for i, j in itertools.product(range(size_figure_grid), range(size_figure_grid)):
-        ax[i, j].get_xaxis().set_visible(False)
-        ax[i, j].get_yaxis().set_visible(False)
+    # Generate batch of images and convert to grid
+    img_grid = make_grid(test_images.cpu().data)
+    img_grid = 0.5*(img_grid[0,:,:] + 1.)
+    # image summary
+    writer.add_image('image', img_grid, count)
+    scm.imsave(os.path.join(args.sample_dir, '{:05d}.png'.format(count)), img_grid)
 
-    for k in range(5*5):
-        i = k // 5
-        j = k % 5
-        ax[i, j].cla()
-        ax[i, j].imshow((test_images[k].cpu().data.numpy().transpose(1, 2, 0) + 1) / 2)
-
-    label = 'Epoch {0}'.format(num_epoch)
-    fig.text(0.5, 0.04, label, ha='center')
-    plt.savefig(path)
-
-    if show:
-        plt.show()
-    else:
-        plt.close()
-
-def show_train_hist(hist, show = False, save = False, path = 'Train_hist.png'):
-    x = range(len(hist['D_losses']))
-
-    y1 = hist['D_losses']
-    y2 = hist['G_losses']
-
-    plt.plot(x, y1, label='D_loss')
-    plt.plot(x, y2, label='G_loss')
-
-    plt.xlabel('Iter')
-    plt.ylabel('Loss')
-
-    plt.legend(loc=4)
-    plt.grid(True)
-    plt.tight_layout()
-
-    if save:
-        plt.savefig(path)
-
-    if show:
-        plt.show()
-    else:
-        plt.close()
 
 # training parameters
 batch_size = 128
 lr = 0.0002
 train_epoch = 20
 
+'''
+celebA preprocessing & post-processing
+'''
+    
+def load_data_list(data_dir):
+    path = os.path.join(data_dir, 'train', '*')
+    file_list = glob(path)
+    return file_list
+
+def preprocess_image(file_list, input_size, phase='train'):
+    imgA = [get_image(img_path, input_size, phase=phase) for img_path in file_list]
+    return np.array(imgA)
+
+def get_image(img_path, input_size, phase='train'):
+    img = scm.imread(img_path) # 218*178*3
+    img_crop = img[34:184,14:164,:] #188*160*3
+    img_resize = scm.imresize(img_crop,[input_size,input_size,3])
+    img_resize = img_resize/127.5 - 1.
+    
+    if phase == 'train' and np.random.random() >= 0.5:
+        img_resize = np.flip(img_resize,1)
+    
+    return img_resize
+
+def inverse_image(img):
+    img = (img + 1.) * 127.5
+    img[img > 255] = 255.
+    img[img < 0] = 0.
+    return img.astype(np.uint8)
+
 # data_loader
-img_size = 64
-isCrop = False
-if isCrop:
-    transform = transforms.Compose([
-        transforms.Scale(108),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
-    ])
-else:
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
-    ])
-transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
-])
-data_dir = 'data/resized_celebA'          # this path depends on your computer
-dset = datasets.ImageFolder(data_dir, transform)
-train_loader = torch.utils.data.DataLoader(dset, batch_size=128, shuffle=True)
-temp = plt.imread(train_loader.dataset.imgs[0][0])
-if (temp.shape[0] != img_size) or (temp.shape[0] != img_size):
-    sys.stderr.write('Error! image size is not 64 x 64! run \"celebA_data_preprocess.py\" !!!')
-    sys.exit(1)
+file_list = load_data_list(args.data_dir)
+batch_idxs = len(file_list) // batch_size
+
+#img_size = 64
+#isCrop = False
+#if isCrop:
+#    transform = transforms.Compose([
+#        transforms.Scale(108),
+#        transforms.ToTensor(),
+#        transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
+#    ])
+#else:
+#    transform = transforms.Compose([
+#        transforms.ToTensor(),
+#        transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
+#    ])
+#transform = transforms.Compose([
+#        transforms.ToTensor(),
+#        transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
+#])
+#data_dir = 'data/resized_celebA'          # this path depends on your computer
+#dset = datasets.ImageFolder(data_dir, transform)
+#train_loader = torch.utils.data.DataLoader(dset, batch_size=128, shuffle=True)
+#temp = plt.imread(train_loader.dataset.imgs[0][0])
+#if (temp.shape[0] != img_size) or (temp.shape[0] != img_size):
+#    sys.stderr.write('Error! image size is not 64 x 64! run \"celebA_data_preprocess.py\" !!!')
+#    sys.exit(1)
 
 # network
 G = generator(128)
@@ -178,26 +219,12 @@ BCE_loss = nn.BCELoss()
 G_optimizer = optim.Adam(G.parameters(), lr=lr, betas=(0.5, 0.999))
 D_optimizer = optim.Adam(D.parameters(), lr=lr, betas=(0.5, 0.999))
 
-# results save folder
-if not os.path.isdir('CelebA_DCGAN_results'):
-    os.mkdir('CelebA_DCGAN_results')
-if not os.path.isdir('CelebA_DCGAN_results/Random_results'):
-    os.mkdir('CelebA_DCGAN_results/Random_results')
-if not os.path.isdir('CelebA_DCGAN_results/Fixed_results'):
-    os.mkdir('CelebA_DCGAN_results/Fixed_results')
-
-train_hist = {}
-train_hist['D_losses'] = []
-train_hist['G_losses'] = []
-train_hist['per_epoch_ptimes'] = []
-train_hist['total_ptime'] = []
-
 print('Training start!')
 start_time = time.time()
+count = 0
 for epoch in range(train_epoch):
-    D_losses = []
-    G_losses = []
-
+    print('Epoch[{}/{}]'.format(epoch+1, train_epoch))
+    
     # learning rate decay
     if (epoch+1) == 11:
         G_optimizer.param_groups[0]['lr'] /= 10
@@ -208,45 +235,46 @@ for epoch in range(train_epoch):
         G_optimizer.param_groups[0]['lr'] /= 10
         D_optimizer.param_groups[0]['lr'] /= 10
         print("learning rate change!")
-
-    num_iter = 0
-
-    epoch_start_time = time.time()
-    for x_, _ in train_loader:
-        # train discriminator D
-        D.zero_grad()
         
-        if isCrop:
-            x_ = x_[:, :, 22:86, 22:86]
+    for idx in tqdm(range(batch_idxs)):
+#    for x_, _ in tqdm(train_loader):
+        
+        # get batch images and labels
+        x_ = preprocess_image(file_list[idx*batch_size:(idx+1)*batch_size], input_size=64, 'train')
+        
+        '''
+        train discriminator D
+        '''
+        D.zero_grad()
 
-        mini_batch = x_.size()[0]
-
-        y_real_ = torch.ones(mini_batch)
-        y_fake_ = torch.zeros(mini_batch)
+        y_real_ = torch.ones(batch_size)
+        y_fake_ = torch.zeros(batch_size)
 
         x_, y_real_, y_fake_ = Variable(x_.cuda()), Variable(y_real_.cuda()), Variable(y_fake_.cuda())
-        D_result = D(x_).squeeze()
-        D_real_loss = BCE_loss(D_result, y_real_)
+        D_real_result = D(x_).squeeze()
+        D_real_loss = BCE_loss(D_real_result, y_real_)
 
-        z_ = torch.randn((mini_batch, 100)).view(-1, 100, 1, 1)
+        z_ = torch.randn((batch_size, 100)).view(-1, 100, 1, 1)
         z_ = Variable(z_.cuda())
         G_result = G(z_)
 
-        D_result = D(G_result).squeeze()
-        D_fake_loss = BCE_loss(D_result, y_fake_)
-        D_fake_score = D_result.data.mean()
+        D_fake_result = D(G_result).squeeze()
+        D_fake_loss = BCE_loss(D_fake_result, y_fake_)
 
         D_train_loss = D_real_loss + D_fake_loss
 
         D_train_loss.backward()
         D_optimizer.step()
-
-        D_losses.append(D_train_loss.data[0])
-
-        # train generator G
+        
+        # summary the real_d & fake_d value
+        writer.add_scalars('val',{'real_d':D_real_result.mean(), 'fake_d':D_fake_result.mean()}, count)
+        
+        '''
+        train generator G
+        '''
         G.zero_grad()
 
-        z_ = torch.randn((mini_batch, 100)).view(-1, 100, 1, 1)
+        z_ = torch.randn((batch_size, 100)).view(-1, 100, 1, 1)
         z_ = Variable(z_.cuda())
 
         G_result = G(z_)
@@ -254,40 +282,11 @@ for epoch in range(train_epoch):
         G_train_loss = BCE_loss(D_result, y_real_)
         G_train_loss.backward()
         G_optimizer.step()
-
-        G_losses.append(G_train_loss.data[0])
-
-        num_iter += 1
-
-    epoch_end_time = time.time()
-    per_epoch_ptime = epoch_end_time - epoch_start_time
-
-
-    print('[%d/%d] - ptime: %.2f, loss_d: %.3f, loss_g: %.3f' % ((epoch + 1), train_epoch, per_epoch_ptime, torch.mean(torch.FloatTensor(D_losses)),
-                                                              torch.mean(torch.FloatTensor(G_losses))))
-    p = 'CelebA_DCGAN_results/Random_results/CelebA_DCGAN_' + str(epoch + 1) + '.png'
-    fixed_p = 'CelebA_DCGAN_results/Fixed_results/CelebA_DCGAN_' + str(epoch + 1) + '.png'
-    show_result((epoch+1), save=True, path=p, isFix=False)
-    show_result((epoch+1), save=True, path=fixed_p, isFix=True)
-    train_hist['D_losses'].append(torch.mean(torch.FloatTensor(D_losses)))
-    train_hist['G_losses'].append(torch.mean(torch.FloatTensor(G_losses)))
-    train_hist['per_epoch_ptimes'].append(per_epoch_ptime)
-
-end_time = time.time()
-total_ptime = end_time - start_time
-train_hist['total_ptime'].append(total_ptime)
-
-print("Avg per epoch ptime: %.2f, total %d epochs ptime: %.2f" % (torch.mean(torch.FloatTensor(train_hist['per_epoch_ptimes'])), train_epoch, total_ptime))
-print("Training finish!... save training results")
-torch.save(G.state_dict(), "CelebA_DCGAN_results/generator_param.pkl")
-torch.save(D.state_dict(), "CelebA_DCGAN_results/discriminator_param.pkl")
-with open('CelebA_DCGAN_results/train_hist.pkl', 'wb') as f:
-    pickle.dump(train_hist, f)
-
-show_train_hist(train_hist, save=True, path='CelebA_DCGAN_results/CelebA_DCGAN_train_hist.png')
-
-images = []
-for e in range(train_epoch):
-    img_name = 'CelebA_DCGAN_results/Fixed_results/CelebA_DCGAN_' + str(e + 1) + '.png'
-    images.append(imageio.imread(img_name))
-imageio.mimsave('CelebA_DCGAN_results/generation_animation.gif', images, fps=5)
+        
+        # summary D_loss & G_loss
+        writer.add_scalars('loss',{'D':D_train_loss, 'G':G_train_loss}, count)
+        
+        if count % 100 == 0:
+            show_result(count, isFix=True)
+            torch.save(G.state_dict(), os.path.join(args.ckpt_dir,"generator_param.pkl"))
+            torch.save(D.state_dict(), os.path.join(args.ckpt_dir,"discriminator_param.pkl"))
