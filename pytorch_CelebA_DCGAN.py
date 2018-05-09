@@ -77,13 +77,13 @@ class generator(nn.Module):
     # forward method
     def forward(self, input):
         # x = F.relu(self.deconv1(input))
-        x = F.relu(self.deconv1_bn(self.deconv1(input))) # 8d*4*4
-        x = F.relu(self.deconv2_bn(self.deconv2(x))) # 4d*8*8
-        x = F.relu(self.deconv3_bn(self.deconv3(x))) # 2d*16*16
-        x = F.relu(self.deconv4_bn(self.deconv4(x))) # d*32*32
-        x = F.tanh(self.deconv5(x)) # 3*64*64
+        x2 = F.relu(self.deconv1_bn(self.deconv1(input))) # 8d*4*4
+        x3 = F.relu(self.deconv2_bn(self.deconv2(x2))) # 4d*8*8
+        x4 = F.relu(self.deconv3_bn(self.deconv3(x3))) # 2d*16*16
+        x5 = F.relu(self.deconv4_bn(self.deconv4(x4))) # d*32*32
+        x6 = F.tanh(self.deconv5(x5)) # 3*64*64
 
-        return x
+        return x6, x3
 
 class discriminator(nn.Module):
     # initializers
@@ -105,13 +105,21 @@ class discriminator(nn.Module):
 
     # forward method
     def forward(self, input):
-        x = F.leaky_relu(self.conv1(input), 0.2) # d*32*32
-        x = F.leaky_relu(self.conv2_bn(self.conv2(x)), 0.2) # 2d*16*16
-        x = F.leaky_relu(self.conv3_bn(self.conv3(x)), 0.2) # 4d*8*8
-        x = F.leaky_relu(self.conv4_bn(self.conv4(x)), 0.2) # 8d*4*4
-        x = F.sigmoid(self.conv5(x))
+        x5 = F.leaky_relu(self.conv1(input), 0.2) # d*32*32
+        x4 = F.leaky_relu(self.conv2_bn(self.conv2(x5)), 0.2) # 2d*16*16
+        x3 = F.leaky_relu(self.conv3_bn(self.conv3(x4)), 0.2) # 4d*8*8
+        x2 = F.leaky_relu(self.conv4_bn(self.conv4(x3)), 0.2) # 8d*4*4
+        x1 = F.sigmoid(self.conv5(x2))
 
-        return x
+        return x1
+    
+    # feature forward method
+    def feature_forward(self, feature):
+        x2 = F.leaky_relu(self.conv4_bn(self.conv4(feature)), 0.2) # 8d*4*4
+        x1 = F.sigmoid(self.conv5(x2))
+
+        return x1
+    
 
 def normal_init(m, mean, std):
     if isinstance(m, nn.ConvTranspose2d) or isinstance(m, nn.Conv2d):
@@ -180,31 +188,6 @@ def inverse_image(img):
 file_list = load_data_list(args.data_dir)
 batch_idxs = len(file_list) // batch_size
 
-#img_size = 64
-#isCrop = False
-#if isCrop:
-#    transform = transforms.Compose([
-#        transforms.Scale(108),
-#        transforms.ToTensor(),
-#        transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
-#    ])
-#else:
-#    transform = transforms.Compose([
-#        transforms.ToTensor(),
-#        transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
-#    ])
-#transform = transforms.Compose([
-#        transforms.ToTensor(),
-#        transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))
-#])
-#data_dir = 'data/resized_celebA'          # this path depends on your computer
-#dset = datasets.ImageFolder(data_dir, transform)
-#train_loader = torch.utils.data.DataLoader(dset, batch_size=128, shuffle=True)
-#temp = plt.imread(train_loader.dataset.imgs[0][0])
-#if (temp.shape[0] != img_size) or (temp.shape[0] != img_size):
-#    sys.stderr.write('Error! image size is not 64 x 64! run \"celebA_data_preprocess.py\" !!!')
-#    sys.exit(1)
-
 # network
 G = generator(128)
 D = discriminator(128)
@@ -216,9 +199,24 @@ D.cuda()
 # Binary Cross Entropy loss
 BCE_loss = nn.BCELoss()
 
+# D & G feature update parameters
+Gf_parameter = [
+    {'params': G.deconv1.parameters()},
+    {'params': G.deconv1_bn.parameters()},
+    {'params': G.deconv2.parameters()},
+    {'params': G.deconv2_bn.parameters()}
+]
+Df_parameter = [
+    {'params': D.conv4.parameters()},
+    {'params': D.conv4_bn.parameters()},
+    {'params': D.conv5.parameters()}
+]
+
 # Adam optimizer
 G_optimizer = optim.Adam(G.parameters(), lr=lr, betas=(0.5, 0.999))
 D_optimizer = optim.Adam(D.parameters(), lr=lr, betas=(0.5, 0.999))
+Gf_optimizer = optim.Adam(Gf_parameter, lr=lr, betas=(0.5, 0.999))
+Df_optimizer = optim.Adam(Df_parameter, lr=lr, betas=(0.5, 0.999))
 
 print('Training start!')
 start_time = time.time()
@@ -258,7 +256,7 @@ for epoch in range(train_epoch):
 
         z_ = torch.randn((batch_size, 100)).view(-1, 100, 1, 1)
         z_ = Variable(z_.cuda())
-        G_result = G(z_)
+        G_result = G(z_)[0]
 
         D_fake_result = D(G_result).squeeze()
         D_fake_loss = BCE_loss(D_fake_result, y_fake_)
@@ -279,7 +277,7 @@ for epoch in range(train_epoch):
         z_ = torch.randn((batch_size, 100)).view(-1, 100, 1, 1)
         z_ = Variable(z_.cuda())
 
-        G_result = G(z_)
+        G_result = G(z_)[0]
         D_result = D(G_result).squeeze()
         G_train_loss = BCE_loss(D_result, y_real_)
         G_train_loss.backward()
