@@ -118,7 +118,7 @@ def normal_init(m, mean, std):
         m.weight.data.normal_(mean, std)
         m.bias.data.zero_()
 
-fixed_z_ = torch.randn((5 * 5, 100)).view(-1, 100, 1, 1)    # fixed noise
+fixed_z_ = torch.randn((8 * 8, 100)).view(-1, 100, 1, 1)    # fixed noise
 fixed_z_ = Variable(fixed_z_.cuda(), volatile=True)
 
 def show_result(count, show = False, save = False, path = 'result.png', isFix=False):
@@ -134,10 +134,10 @@ def show_result(count, show = False, save = False, path = 'result.png', isFix=Fa
 
     # Generate batch of images and convert to grid
     img_grid = make_grid(test_images.cpu().data)
-    img_grid = 0.5*(img_grid[0,:,:] + 1.)
+    img_grid = 0.5*(img_grid + 1.)
     # image summary
     writer.add_image('image', img_grid, count)
-    scm.imsave(os.path.join(args.sample_dir, '{:05d}.png'.format(count)), img_grid)
+#    scm.imsave(os.path.join(args.sample_dir, '{:05d}.png'.format(count)), img_grid)
 
 
 # training parameters
@@ -166,7 +166,8 @@ def get_image(img_path, input_size, phase='train'):
     
     if phase == 'train' and np.random.random() >= 0.5:
         img_resize = np.flip(img_resize,1)
-    
+	
+    img_resize = np.transpose(img_resize, [2,0,1])    
     return img_resize
 
 def inverse_image(img):
@@ -237,10 +238,11 @@ for epoch in range(train_epoch):
         print("learning rate change!")
         
     for idx in tqdm(range(batch_idxs)):
-#    for x_, _ in tqdm(train_loader):
+        count += 1
         
         # get batch images and labels
-        x_ = preprocess_image(file_list[idx*batch_size:(idx+1)*batch_size], input_size=64, 'train')
+        x_ = preprocess_image(file_list[idx*batch_size:(idx+1)*batch_size], input_size=64)
+        x_ = torch.from_numpy(x_).float()
         
         '''
         train discriminator D
