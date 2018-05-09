@@ -126,7 +126,7 @@ fixed_z_ = torch.randn((8 * 8, 100)).view(-1, 100, 1, 1)    # fixed noise
 fixed_z_ = Variable(fixed_z_.cuda(), volatile=True)
 
 
-def show_result(count, show = False, save = False, path = 'result.png', isFix=False):
+def show_result(count, isFix=False):
     z_ = torch.randn((5*5, 100)).view(-1, 100, 1, 1)
     z_ = Variable(z_.cuda(), volatile=True)
 
@@ -194,26 +194,12 @@ D_optimizer = optim.Adam(D.parameters(), lr=lr, betas=(0.5, 0.999))
 Gf_optimizer = optim.Adam(Gf_parameter, lr=lr, betas=(0.5, 0.999))
 Df_optimizer = optim.Adam(Df_parameter, lr=lr, betas=(0.5, 0.999))
 
-# results save folder
-if not os.path.isdir('MNIST_DCGAN_results'):
-    os.mkdir('MNIST_DCGAN_results')
-if not os.path.isdir('MNIST_DCGAN_results/Random_results'):
-    os.mkdir('MNIST_DCGAN_results/Random_results')
-if not os.path.isdir('MNIST_DCGAN_results/Fixed_results'):
-    os.mkdir('MNIST_DCGAN_results/Fixed_results')
-
-train_hist = {}
-train_hist['D_losses'] = []
-train_hist['G_losses'] = []
-train_hist['per_epoch_ptimes'] = []
-train_hist['total_ptime'] = []
-
 print('training start!')
 start_time = time.time()
 count = 0
 for epoch in range(train_epoch):
     print('Epoch[{}/{}]'.format(epoch+1, train_epoch))
-    epoch_start_time = time.time()
+    
     for x_, _ in tqdm(train_loader):
         count += 1
         mini_batch = x_.size()[0]
@@ -305,6 +291,6 @@ for epoch in range(train_epoch):
         
         
         if count % 100 == 0:
-            show_result(count, show = False, save = False, path = 'result.png', isFix=True)
+            show_result(count, isFix=True)
             torch.save(G.state_dict(), os.path.join(args.ckpt_dir,"generator_param.pkl"))
             torch.save(D.state_dict(), os.path.join(args.ckpt_dir,"discriminator_param.pkl"))
